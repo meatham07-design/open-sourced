@@ -30,6 +30,14 @@ describe('per-user OpenRouter connection', () => {
     expect(body.response_format.json_schema.schema.properties.cards).toMatchObject({ minItems: 2, maxItems: 100 })
   })
 
+  it('exchanges a callback only once during concurrent mounts', async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ key: 'user-session-key' }), { status: 200 }))
+    vi.stubGlobal('fetch', request)
+    await Promise.all([completeOpenRouterOAuth(), completeOpenRouterOAuth()])
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(hasOpenRouterSession()).toBe(true)
+  })
+
   it('surfaces free quota exhaustion without retrying another model', async () => {
     const request = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ key: 'user-session-key' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'Rate limited' } }), { status: 429, headers: { 'Content-Type': 'application/json' } }))
@@ -41,7 +49,7 @@ describe('per-user OpenRouter connection', () => {
 
   it('uses an explicitly selected provider model with the visitor-owned key', async () => {
     const request = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ key: 'user-session-key' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ title: 'Cells', subject: 'Biology', description: 'Basics', cards: [] }) } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ title: 'Cells', subject: 'Biology', description: 'Basics', cards: Array.from({ length: 17 }, (_, i) => ({ term: `T${i}`, definition: `D${i}`, note: '' })) }) } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', request)
     await completeOpenRouterOAuth()
     await generateWithOpenRouter({ topic: 'Cells', resource: 'A'.repeat(120), count: 17, model: 'anthropic/claude-sonnet-4.5' })

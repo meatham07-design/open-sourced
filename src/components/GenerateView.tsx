@@ -5,6 +5,8 @@ import { extractFile } from '../lib/resources'
 import { makeId } from '../lib/study'
 import { beginOpenRouterOAuth, completeOpenRouterOAuth, disconnectOpenRouter, generateWithOpenRouter, hasOpenRouterSession, listGenerationModels, type GenerationModel, type ModelFamily } from '../lib/openrouter'
 import { generationPresets } from '../data/generationPresets'
+import { extractImageText } from '../lib/imageVision'
+import { validateGeneratedSet } from '../lib/generatedSet'
 
 type Props = { onDraft: (draft: GeneratedSet, sources: string[]) => void }
 
@@ -39,14 +41,26 @@ export function GenerateView({ onDraft }: Props) {
   }, [])
 
   const addFiles = async (files: FileList | null) => {
-    if (!files?.length) return
+    if (!files?.length || extracting || loading) return
     setExtracting(true); setError('')
     try {
       const chosen = [...files]
-      const texts = await Promise.all(chosen.map(extractFile))
-      setResource((current) => [current, ...texts].filter(Boolean).join('\n\n--- NEXT RESOURCE ---\n\n').slice(0, 60_000))
-      setSources((current) => [...new Set([...current, ...chosen.map((file) => file.name)])])
-    } catch { setError('One of those files could not be read. Try PDF, TXT, Markdown, CSV, or JSON.') }
+      let combined = resource
+      const added: string[] = []
+      const errors: string[] = []
+      for (const file of chosen) {
+        try {
+          const text = file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(file.name) ? await extractImageText(file) : await extractFile(file)
+          const next = [combined, text].filter(Boolean).join('\n\n--- NEXT RESOURCE ---\n\n')
+          if (next.length > 60_000) throw new Error('This file exceeds the remaining source space. Shorten the source or use fewer files.')
+          combined = next
+          added.push(file.name)
+        } catch (caught) { errors.push(`${file.name}: ${caught instanceof Error ? caught.message : 'Could not read file.'}`) }
+      }
+      setResource(combined)
+      setSources((current) => [...new Set([...current, ...added])])
+      setError(errors.join(' '))
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'One of those files could not be read.') }
     finally { setExtracting(false) }
   }
 
@@ -66,8 +80,9 @@ export function GenerateView({ onDraft }: Props) {
         if (!response.ok) throw new Error(result.error || (response.status === 404 ? 'Connect OpenRouter to use your own free quota.' : 'Generation failed.'))
         body = result
       }
-      const cards: StudyCard[] = body.cards.map((card) => ({ ...card, id: makeId() }))
-      onDraft({ ...body, cards }, sources.length ? sources : ['Pasted source'])
+      const validated = validateGeneratedSet(body, exactCount)
+      const cards: StudyCard[] = validated.cards.map((card) => ({ ...card, id: makeId() }))
+      onDraft({ ...validated, cards }, sources.length ? sources : ['Pasted source'])
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Generation failed.') }
     finally { setLoading(false); if (family !== 'free') setPaidConfirmed(false) }
   }
@@ -107,8 +122,8 @@ export function GenerateView({ onDraft }: Props) {
         <div className="preset-grid">{generationPresets.map((item) => <button type="button" key={item.id} className={preset === item.id ? 'selected' : ''} onClick={() => applyPreset(item.id)} aria-pressed={preset === item.id}><b>{item.label}</b><small>{item.description}</small></button>)}</div>
         <label><span>Additional instructions (optional)</span><textarea rows={4} maxLength={2000} value={instructions} onChange={(event) => { setInstructions(event.target.value); setPreset('custom') }} placeholder="For example: Focus on clinical scenarios, keep answers concise, and include common misconceptions." /><small>{instructions.length.toLocaleString()} / 2,000 characters. Edit a preset or write your own directions.</small></label>
       </fieldset>
-      <label><span>Paste source material *</span><textarea rows={12} maxLength={60000} value={resource} onChange={(event) => setResource(event.target.value)} placeholder="Paste lecture notes, a study guide, an article, or any source text here…" /><small>{resource.length.toLocaleString()} / 60,000 characters</small></label>
-      <div className="upload-zone"><FileUp size={25} /><div><b>{extracting ? 'Reading files…' : 'Or add resource files'}</b><span>PDF, TXT, Markdown, CSV, or JSON</span></div><label className="secondary file-button">Choose files<input type="file" multiple accept=".pdf,.txt,.md,.markdown,.csv,.json,text/*,application/pdf" onChange={(event) => addFiles(event.target.files)} /></label></div>
+      <label><span>Paste source material *</span><textarea rows={12} maxLength={60000} value={resource} disabled={extracting} onChange={(event) => setResource(event.target.value)} placeholder="Paste lecture notes, a study guide, an article, or any source text here…" /><small>{resource.length.toLocaleString()} / 60,000 characters</small></label>
+      <div className="upload-zone"><FileUp size={25} /><div><b>{extracting ? 'Reading files…' : 'Or add resource files'}</b><span>Photos (PNG, JPG, WebP, up to 8 MB each), PDF, TXT, Markdown, CSV, or JSON. Photos use your connected OpenRouter free quota.</span></div><label className="secondary file-button">Choose files<input type="file" multiple disabled={extracting || loading} aria-label="Upload resource files" accept="image/png,image/jpeg,image/webp,.pdf,.txt,.md,.markdown,.csv,.json,text/*,application/pdf" onChange={(event) => { void addFiles(event.target.files); event.target.value = '' }} /></label></div>
       {!!sources.length && <div className="source-chips">{sources.map((source) => <span key={source}><FileText size={14} />{source}<button onClick={() => setSources((current) => current.filter((item) => item !== source))} aria-label={`Remove ${source}`}><X size={13} /></button></span>)}</div>}
       {error && <div className="form-error" role="alert">{error}</div>}
       <button className="primary generate-button" onClick={generate} disabled={loading || extracting || !ready}>{loading ? <><LoaderCircle className="spin" /> Building your draft…</> : <><Sparkles /> Generate editable cards <ArrowRight /></>}</button>

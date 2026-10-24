@@ -1,4 +1,5 @@
 import type { GeneratedSet } from '../types'
+import { validateGeneratedSet } from './generatedSet'
 
 const KEY_STORAGE = 'open-source-ed.openrouter.session-key'
 const VERIFIER_STORAGE = 'open-source-ed.openrouter.pkce-verifier'
@@ -65,7 +66,16 @@ export async function beginOpenRouterOAuth() {
   window.location.assign(url)
 }
 
-export async function completeOpenRouterOAuth() {
+// React StrictMode can mount the callback screen twice. Exchange each one-use
+// authorization code only once while the request is in flight.
+let oauthExchange: Promise<boolean> | undefined
+export function completeOpenRouterOAuth() {
+  if (oauthExchange) return oauthExchange
+  oauthExchange = exchangeOpenRouterOAuth().finally(() => { oauthExchange = undefined })
+  return oauthExchange
+}
+
+async function exchangeOpenRouterOAuth() {
   const params = new URLSearchParams(window.location.search)
   const code = params.get('code')
   if (!code) return false
@@ -121,5 +131,7 @@ export async function generateWithOpenRouter({ topic, resource, count, instructi
   }
   const content = body.choices?.[0]?.message?.content
   if (!content) throw new Error('The selected model returned no study material.')
-  return JSON.parse(content) as GeneratedSet
+  let parsed: unknown
+  try { parsed = JSON.parse(content) } catch { throw new Error('The AI returned unreadable study cards. Try again; your source material is still here.') }
+  return validateGeneratedSet(parsed, count) as GeneratedSet
 }
