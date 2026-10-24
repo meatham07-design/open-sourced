@@ -1,0 +1,14 @@
+name: open-sourced-study
+static_sites:
+  - name: study
+    github:
+      repo: meatham07-design/open-sourced
+      branch: feature/image-to-flashcards-digitalocean
+      deploy_on_push: false
+    source_dir: /
+    build_command: npm ci && npm test && npm run build
+    output_dir: dist
+    index_document: index.html
+    catchall_document: index.html
+    routes:
+      - path: /
